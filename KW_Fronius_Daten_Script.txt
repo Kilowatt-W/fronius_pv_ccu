@@ -1,0 +1,181 @@
+!Kilowatt's Version aktualisiert und erweitert um div. Stati und Werte
+!-----------------------------------------------------------------------------
+!Credit an Stefan Onderka, www.onderka.com für die StatusCode-Auswertung
+! 0 bis 5:Sleep,6:Start,7:Produktion,8:Standby,9:Bootloader,10:Fehler
+!Dietmar's Version V1.1 21.01.2021 der Ursprungsversion von ldittmar  https://homematic-forum.de/forum/viewtopic.php?f=31&t=24675&hilit=fronius#p212221
+!-----------------------------------------------------------------------------
+! Hier alle was man verändern kann/muss
+! Voraussetzung: CUxD und Fronius Symo Wechselrichter mit Fronius SmartMeter
+!-----------------------------------------------------------------------------
+var froniusIP = "10.188.246.100"; !IP des Fronius Wechselrichters
+var deviceID = "1"; !Device ID (wird meistens stimmen, wenn nicht ausprobieren)
+var CUxD_Device = "CUxD.CUX2801001:4"; !CUxD Virtuelles Gerät
+string variable_verbrauch = "PV_Verbrauch"; !Name der Variable für den Verbrauch
+string variable_erzeugung = "PV_Erzeugung"; !Name der Variable für die Erzeugung
+string variable_einspeisung = "PV_Einspeisung"; !Name der Variable für den Einspeisung
+string variable_netzbezug = "PV_Netzbezug"; !Name der Variable für den Netzbezug
+string variable_soc = "PV_Batterie_SOC"; !Name der Variable für den Batterie - Ladestand
+string variable_ladung = "PV_Batterie_Ladung"; !Name der Variable für die Batterie Ladeleistung
+string variable_entladung = "PV_Batterie_Entladung"; !Name der Variable für die Batterie Entladeleistung
+string variable_status_code = "PV_Status_Code"; !Name der Variable für den Statuscode der Anlage
+string variable_status_zustand = "PV_Zustand"; !Name der Variable für den Zustand zur Umwandlung Statuscode der Anlage in Klartext
+
+!-----------------------------------------------------------------------------
+! Ab hier muss man nichts mehr beachten
+!-----------------------------------------------------------------------------
+	
+string pos1;
+string pos2 = ",";
+string pos3 = ":";
+string pos_CR = "\t";
+string pos_4 ="}";
+string wertTimeStamp = ".";
+real wertVerbrauch;
+real wertErzeugung;
+real wertNetzfluss;
+real wertSoC;
+real wertBatteriefluss;
+real wertStatusCode;
+integer wert_pos;
+var stdout;
+var stdout_info;   
+   
+string url = "http://" + froniusIP + "/solar_api/v1/";
+string flussParam="GetPowerFlowRealtimeData.fcgi?Scope=System";
+string verbrauchParam = "GetMeterRealtimeData.cgi?Scope=System";
+string erzeugungParam = "GetInverterRealtimeData.cgi?Scope=Device&DeviceId=" + deviceID + "&DataCollection=CommonInverterData";
+string erzeugungTagParam = "GetInverterRealtimeData.cgi?Scope=Device"+"&DataCollection=CumulationInverterData"+"&DeviceId=" + deviceID;
+string InfoParam = "GetInverterInfo.cgi";
+
+!dom.GetObject(variable_status_zustand).State("Das ist ein Test");
+
+!-----------------------------------------------------------------------------
+! Aktueller Verbrauch in [W]
+!-----------------------------------------------------------------------------
+	
+dom.GetObject(CUxD_Device + ".CMD_SETS").State("wget -q -O - " + url + flussParam);
+dom.GetObject(CUxD_Device + ".CMD_QUERY_RET").State(1);
+stdout = dom.GetObject(CUxD_Device + ".CMD_RETS").State();
+	
+pos1 = "\"P_Load\" :";
+wert_pos = stdout.Find(pos1) +  pos1.Length();
+wertVerbrauch = stdout.Substr(wert_pos,20).StrValueByIndex(pos2,0);
+
+dom.GetObject(variable_verbrauch).State(wertVerbrauch.ToFloat() * -1);
+
+!-----------------------------------------------------------------------------
+! Aktuell wird erzeugt in [W]
+!-----------------------------------------------------------------------------
+
+	pos1 = "\"P_PV\" :";
+wert_pos = stdout.Find(pos1) +  pos1.Length();
+wertErzeugung = stdout.Substr(wert_pos,20).StrValueByIndex(pos2,0);
+
+dom.GetObject(variable_erzeugung).Variable(wertErzeugung.ToFloat());
+
+!-----------------------------------------------------------------------------
+! Netzfluss auslesen eingespeist(negativ)/bezogen(positiv) in [W]
+!-----------------------------------------------------------------------------
+
+	pos1 = "\"P_Grid\" :";
+wert_pos = stdout.Find(pos1) +  pos1.Length();
+wertNetzfluss = stdout.Substr(wert_pos,20).StrValueByIndex(pos2,0);
+
+!-----------------------------------------------------------------------------
+! Wenn Netzfluss ist negativ, dann als positive Einspeisungs-Wert in Watt Speichern, sonst als Netzbezug
+!-----------------------------------------------------------------------------
+
+if(wertNetzfluss.ToInteger() < 0) 
+    {dom.GetObject(variable_einspeisung).State(wertNetzfluss.ToFloat()*-1);
+     dom.GetObject(variable_netzbezug).Variable(0);}
+  else
+    {dom.GetObject(variable_netzbezug).Variable(wertNetzfluss.ToFloat()*1);
+     dom.GetObject(variable_einspeisung).State(0);}
+
+!-----------------------------------------------------------------------------
+! Batterie SoC auslesen in [W]
+!-----------------------------------------------------------------------------
+
+	pos1 = "\"SOC\" :";
+wert_pos = stdout.Find(pos1) +  pos1.Length();
+wertSoC = stdout.Substr(wert_pos,20).StrValueByIndex(pos_CR,0).Trim();
+dom.GetObject(variable_soc).State(wertSoC.ToFloat());
+
+!-----------------------------------------------------------------------------
+! Batterie Strom auslesen in [W]
+!-----------------------------------------------------------------------------
+
+	pos1 = "\"P_Akku\" :";
+wert_pos = stdout.Find(pos1) +  pos1.Length();
+wertBatteriefluss = stdout.Substr(wert_pos,20).StrValueByIndex(pos2,0);
+
+
+!-----------------------------------------------------------------------------
+! Wenn Batteriefluss negativ ist, dann als positiven Entladungs-Wert in Watt Speichern, sonst als Ladewert
+!-----------------------------------------------------------------------------
+
+if(wertBatteriefluss.ToFloat()<0)
+    {dom.GetObject(variable_ladung).Variable(wertBatteriefluss.ToFloat()*-1 );
+     dom.GetObject(variable_entladung).Variable(0);}
+  else
+    {dom.GetObject(variable_entladung).Variable(wertBatteriefluss.ToFloat()*1);
+     dom.GetObject(variable_ladung).Variable(0);};
+	 
+	 
+!-----------------------------------------------------------------------------
+! PV Status Code auslesen in Integer
+!-----------------------------------------------------------------------------
+
+dom.GetObject(CUxD_Device + ".CMD_SETS").State("wget -q -O - " + url + InfoParam);
+dom.GetObject(CUxD_Device + ".CMD_QUERY_RET").State(1);
+stdout_info = dom.GetObject(CUxD_Device + ".CMD_RETS").State();
+
+
+	pos1 = "\"StatusCode\" :";
+wert_pos = stdout_info.Find(pos1) +  pos1.Length();
+wertStatusCode = stdout_info.Substr(wert_pos,25).StrValueByIndex(pos_CR,0).Trim();
+dom.GetObject(variable_status_code).State(wertStatusCode.ToInteger());	 
+var pva_code = wertStatusCode.ToInteger();
+if ( pva_code == 0 ) {
+   dom.GetObject(variable_status_zustand).State("Sleep");
+}
+if ( pva_code == 1 ) {
+   dom.GetObject(variable_status_zustand).State("Sleep");
+}
+if ( pva_code == 2 ) {
+   dom.GetObject(variable_status_zustand).State("Sleep");
+}
+if ( pva_code == 3 ) {
+   dom.GetObject(variable_status_zustand).State("Sleep");
+}
+if ( pva_code == 4 ) {
+   dom.GetObject(variable_status_zustand).State("Sleep");
+}
+if ( pva_code == 5 ) {
+   dom.GetObject(variable_status_zustand).State("Sleep");
+}
+if ( pva_code == 6 ) {
+   dom.GetObject(variable_status_zustand).State("Start");
+}
+if ( pva_code == 7 ) {
+   dom.GetObject(variable_status_zustand).State("Produktion");
+}
+if ( pva_code == 8 ) {
+   dom.GetObject(variable_status_zustand).State("Standby");
+}
+if ( pva_code == 9 ) {
+   dom.GetObject(variable_status_zustand).State("Bootloader");
+}
+if ( pva_code == 10 ) {
+   dom.GetObject(variable_status_zustand).State("Fehler");
+}
+
+!-----------------------------------------------------------------------------
+! TimeStamp auslesen und an Zustand anhängen
+!-----------------------------------------------------------------------------
+
+	pos1 = "\"Timestamp\" :";
+wert_pos = stdout_info.Find(pos1) +  pos1.Length();
+wertTimeStamp = stdout_info.Substr(wert_pos,30).StrValueByIndex(pos_CR,0).Trim();
+dom.GetObject(variable_status_zustand).State(dom.GetObject(variable_status_zustand).State()+" , "+wertTimeStamp);
+
